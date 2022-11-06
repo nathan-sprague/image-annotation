@@ -1,76 +1,22 @@
-import os
-import cv2
-import json
-import numpy as np
-import math
-
-saveName = "ear"
-largerRectName = ""
-
-if saveName == "earPoly":
-	videosPath = "/home/nathan/Desktop/ear_stalk_detection/ear_videos/ear_rgb_training_videos"
-	modelName = "/home/nathan/Desktop/ear_stalk_detection/annotate_train_tools/earPoly_nov2_mine_poly.tflite"
-
-if saveName == "ear":
-	videosPath = "/home/nathan/Desktop/ear_stalk_detection/ear_videos/ear_rgb_training_videos"
-	modelName = ""#"/home/nathan/Desktop/ear_stalk_detection/stalk-ear-detection/ear_finder/ear_tflite/corn_ear_oct16.tflite"
-
-if saveName == "topPlant":
-	videosPath = "/home/nathan/Desktop/ear_stalk_detection/ear_videos/ear_rgb_training_videos"
-	modelName = "/home/nathan/Desktop/ear_stalk_detection/annotate_train_tools/topNode_oct31.tflite"
-
-if saveName == "topNodes":
-	videosPath = "/home/nathan/Desktop/ear_stalk_detection/ear_videos/ear_rgb_training_videos/topPlant_images/topNodes_train"
-	modelName = "/home/nathan/Desktop/ear_stalk_detection/annotate_train_tools/topNode_oct31.tflite"
-
-elif saveName == "wholePlant":
-	videosPath = "/home/nathan/Desktop/ear_stalk_detection/stalk_videos/stalk_rgb_training_videos"
-	modelName = ""
-
-elif saveName == "node":
-	videosPath = "/home/nathan/Desktop/ear_stalk_detection/stalk_videos/stalk_rgb_training_videos/wholePlant_images"
-	modelName = ""
-
-elif saveName == "node": # with subrects
-	videosPath = "/home/nathan/Desktop/ear_stalk_detection/stalk_videos/stalk_rgb_training_videos"
-	modelName = ""
-	largerRectName = "wholePlant"
-
-elif saveName == "beeGroup":
-	videosPath = "/home/nathan/Desktop/lab/beeVideos_use"
-	modelName = "/home/nathan/Desktop/lab/bee_model.tflite"
-
-elif saveName == "bee":
-	videosPath = "/home/nathan/Desktop/lab/beeVideos_use/beeGroup_images"
-	modelName = "/home/nathan/Desktop/lab/bee_model.tflite"
-
-elif saveName == "queenBee":
-	videosPath = "/home/nathan/Desktop/lab/beeVideos_use"
-	modelName = "/home/nathan/Desktop/ear_stalk_detection/annotate_train_tools/earPoly_nov2_mine_poly.tflite"
-
-
-if modelName != "":
-	from tflite_support.task import core
-	from tflite_support.task import processor
-	from tflite_support.task import vision
 
 
 class Annotator:
-	def __init__(self, path, labelName, modelName="", largerRectName = ""):
+	def __init__(self, path, labelName, modelName=""):
 		self.currentRectangles = {"drawnRectangles": [], "tempRectangle": [[]], "possibleRectangles": [], "selectedRect": []}
 		self.firstCallback = True
 		self.path = path
 		self.labelName = labelName
+		self.fileLabelName = ""
+		for i in self.labelName:
+			self.fileLabelName += i + "_"
+		self.fileLabelName = self.fileLabelName[0:-1]
+
 		self.savableRects = {}
 		self.unsavedChanges = False
 
-		self.useSubRects = False
-		if largerRectName != "":
-			self.useSubRects = True
-			self.largerRectName = largerRectName
 		self.selectedRectInd = -1
 
-		self.scale = (1,1)
+		self.scale = 1
 		self.mouseDown = False
 
 		self.polygonMode = False
@@ -79,16 +25,25 @@ class Annotator:
 		self.numRects = 0
 		self.numImgs = 0
 
+		self.labelingInd = 0
+
 
 		self.falseKey = -1
 
-		self.saveSmallerImgs = True
-
 
 		self.defaultButtons = {"  delete": [(20, 20), (180, 80), 8], "    prev label": [(20, 100), (180, 160), 91], " prev": [(20, 180), (180, 240), 106], " next": [(20, 260), (180, 320), 108],
-						"    next label": [(20, 340), (180, 400), 93], "  rect": [(20, 420), (180, 480), 199], " exit": [(20, 500), (180, 560), 27]} # poly used to be 116
+						"    next label": [(20, 340), (180, 400), 93], " export": [(20, 420), (180, 480), 202], " exit": [(20, 500), (180, 560), 27]} # poly used to be 116
 
 		self.selectedButtons = {"  delete": [(20, 20), (180, 80), 8], "    deselect": [(20, 100), (180, 160), 199], " Trunc": [(20, 180), (180, 240), 200], "  Diff": [(20, 260), (180, 320), 201]}
+
+		self.transformations = {"change color spaces":False, "mirror horizontally":False, "mirror vertically": False, "save just labeled rectangles": False, "Include Pascal VOC label (XML)": True}
+
+
+		j = 0
+		if len(self.labelName) > 1:
+			for i in self.labelName:
+				self.selectedButtons[i] = [(20, 340 + j*80), (180, 400 + j*80), j+300]
+				j+=1
 
 		self.buttons = self.defaultButtons
 
@@ -100,10 +55,84 @@ class Annotator:
 			base_options = core.BaseOptions(
 			  file_name=modelName, use_coral=False, num_threads=4)
 			detection_options = processor.DetectionOptions(
-				max_results=5, score_threshold=0.1)
+				max_results=5, score_threshold=0.05)
 			options = vision.ObjectDetectorOptions(
 				base_options=base_options, detection_options=detection_options)
 			self.detector = vision.ObjectDetector.create_from_options(options)
+
+
+
+	def settingsEventHandler(self, event, x, y, flags, param):
+
+		if event == 4 and x < 200 and y < 60:
+			print("cancel")
+			cv2.destroyWindow("export settings")
+		elif event == 4 and x < 180 and x > 140:
+			i=0
+			for button in self.transformations:
+				yMin = 70+50*i
+				yMax = 110+50*i
+				if yMin < y < yMax:
+					self.transformations[button] = not self.transformations[button]
+					self.showSettings()
+					break
+				i+=1
+		elif event == 4:
+			if 600 > x > 400 and 500 < y < 560:
+				print("exporting!")
+				cv2.destroyWindow("export settings")
+				if self.transformations["save just labeled rectangles"]:
+					self.saveImagesData()
+				else:
+					self.saveNormalDataXML()
+
+
+	def showSettings(self):
+		img = np.zeros((700, 1000,3), dtype=np.uint8)
+		img[:,:] = (255, 255, 255)
+		buttonsLabels = list(self.transformations.keys())
+
+		self.countLabels()
+
+		ogImgs = self.numImgs
+
+		factor = 1
+		# if self.transformations["rotate images"]:
+		# 	factor *= 4
+		if self.transformations["change color spaces"]:
+			factor *= 5
+		if self.transformations["mirror horizontally"]:
+			factor *= 2
+		if self.transformations["mirror vertically"]:
+			factor *= 2
+		newImgs = ogImgs * factor
+
+
+		i=0
+		while i < len(buttonsLabels):
+			img = cv2.putText(img, buttonsLabels[i], (200, 100 + 50*i), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2, cv2.LINE_AA)
+			color = (0,0,255)
+			if self.transformations[buttonsLabels[i]]:
+				color = (0,255,0)
+			img = cv2.rectangle(img, (140, 70+50*i), (180, 110+50*i), color, -1)
+			i+=1
+
+
+		img = cv2.putText(img, str(ogImgs) + " images turned to " + str(newImgs) + " after transformations", (200, 100 + 50*i), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2, cv2.LINE_AA)
+
+		img = cv2.rectangle(img, (0, 0), (200, 60), (250,255,0), 2)
+		img = cv2.putText(img, "Cancel", (45, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2, cv2.LINE_AA)
+
+		img = cv2.rectangle(img, (400, 500), (600, 560), (250,255,0), 2)
+		img = cv2.putText(img, "Export!", (445, 540), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2, cv2.LINE_AA)
+
+
+
+		cv2.imshow("export settings", img)
+		cv2.setMouseCallback("export settings", self.settingsEventHandler)
+
+
+
 
 
 	def mouseEvent(self, event, x, y, flags, param):
@@ -185,7 +214,10 @@ class Annotator:
 			self.selectedRectInd = -1
 			self.currentRectangles["selectedRect"] = []
 			self.mouseDown = True
-			self.currentRectangles["tempRectangle"][0] = [x,y,x,y,0,0]
+			if len(self.labelName) > 1:
+				self.currentRectangles["tempRectangle"][0] = [x,y,x,y,0,0,self.labelingInd]
+			else:
+				self.currentRectangles["tempRectangle"][0] = [x,y,x,y,0,0]
 
 		elif event==4:
 			self.mouseDown = False
@@ -196,7 +228,7 @@ class Annotator:
 			
 
 					self.currentRectangles["drawnRectangles"] += [
-					[min(tempRect[0], tempRect[2]), min(tempRect[1], tempRect[3]), max(tempRect[0], tempRect[2]), max(tempRect[1], tempRect[3])]]
+					[min(tempRect[0], tempRect[2]), min(tempRect[1], tempRect[3]), max(tempRect[0], tempRect[2]), max(tempRect[1], tempRect[3]), 0, 0, self.labelingInd]]
 					print("Made rectangle")
 					self.numRects += 1
 					self.unsavedChanges = True
@@ -307,7 +339,24 @@ class Annotator:
 			for rect in self.currentRectangles[rectType]:
 				if len(rect) > 0:
 					if type(rect[0]) == int:
+						if len(rect) > 5:
+							if rect[4] == 1: # truncated
+								drawImg = cv2.putText(drawImg, "t", (int(rect[0]*self.scale+40), int(rect[1]*self.scale-5)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
+							if rect[5] == 1: # difficult
+								drawImg = cv2.putText(drawImg, "d", (int(rect[0]*self.scale), int(rect[1]*self.scale-5)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
+
+						if len(self.labelName) > 1:
+							center = (int((rect[0]+rect[2])*self.scale/2), int((rect[1]+rect[3])*self.scale/2))
+							if len(rect) > 6:
+
+								drawImg = cv2.putText(drawImg, self.labelName[rect[6]][0], center, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
+							else:
+								drawImg = cv2.putText(drawImg, self.labelName[0][0], center, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
+
+
 						drawImg = cv2.rectangle(drawImg, (int(rect[0]*self.scale), int(rect[1]*self.scale)), (int(rect[2]*self.scale), int(rect[3]*self.scale)), colors[rectType], thicknesses[rectType])
+					
+
 					else:
 
 						furthest = [-1, 0]
@@ -381,7 +430,7 @@ class Annotator:
 
 			truncated = 0
 			difficult = 0
-			if len(self.currentRectangles["drawnRectangles"][self.selectedRectInd]) == 6:
+			if len(self.currentRectangles["drawnRectangles"][self.selectedRectInd]) > 5:
 				truncated = self.currentRectangles["drawnRectangles"][self.selectedRectInd][4]
 				difficult = self.currentRectangles["drawnRectangles"][self.selectedRectInd][5]
 			dirText = "truncated: " + str(truncated)
@@ -445,10 +494,13 @@ class Annotator:
 					exit()
 
 			elif k == 108: # l
-				jumpAmount = 5
+				if self.fileType == "img":
+					jumpAmount = 1
+				else:
+					jumpAmount = 5
 
 			elif k == 106: # j
-				if self.useSubRects:
+				if self.fileType == "img":
 					jumpAmount = -1
 				else:
 					jumpAmount = -5
@@ -469,6 +521,7 @@ class Annotator:
 						print("unable to skip, none before")
 				else:
 					print("no identified rectangles")
+
 
 			elif k == 93: # ] skip to closest larger identified rectangle
 				framesToGo = np.array([eval(i) for i in list(self.savableRects.keys())])
@@ -492,7 +545,26 @@ class Annotator:
 				print("Saving JSON")
 				self.saveDataJSON()
 
-			elif k == 116: # t
+			elif k == 100:
+				if self.selectedRectInd != -1:
+					if len(self.currentRectangles["drawnRectangles"][self.selectedRectInd]) < 6:
+						self.currentRectangles["drawnRectangles"][self.selectedRectInd] += [0,0]
+					self.currentRectangles["drawnRectangles"][self.selectedRectInd][5] = (self.currentRectangles["drawnRectangles"][self.selectedRectInd][5] + 1) % 2
+					self.dispImg()
+				else:
+					print("no rectangle selected")
+
+			elif k == 116:
+				if self.selectedRectInd != -1:
+					if len(self.currentRectangles["drawnRectangles"][self.selectedRectInd]) < 6:
+						self.currentRectangles["drawnRectangles"][self.selectedRectInd] += [0,0]
+					self.currentRectangles["drawnRectangles"][self.selectedRectInd][4] = (self.currentRectangles["drawnRectangles"][self.selectedRectInd][4] + 1) % 2
+					self.dispImg()
+				else:
+					print("no rectangle selected")
+
+			elif k == 117 and False: # u (polygon is unused)
+				print("polygon feature retired")
 				if "  polygon" in self.buttons:
 					b = self.buttons["  polygon"]
 					self.buttons["  rect"] = b
@@ -508,16 +580,13 @@ class Annotator:
 					self.polygonMode = True
 					print("polygon mode")
 
-				
 				self.saveDataJSON()
 				self.dispImg()
 
 			elif k == 112: # p
 				print("exporting images")
-				if self.useSubRects:
-					self.saveNormalDataXML()
-				else:
-					self.saveNormalDataXML()
+				
+				self.saveNormalDataXML()
 
 			elif k == 111: # o
 				print("exporting just images")
@@ -551,6 +620,8 @@ class Annotator:
 				self.unsavedChanges = True
 				self.currentRectangles = {"drawnRectangles": [], "tempRectangle": [[]], "possibleRectangles": [], "selectedRect": []}
 				self.dispImg()
+			elif k == 122:
+				jumpAmount = 99999
 
 			elif k == 199: # deselect
 				self.selectedRectInd = -1
@@ -574,6 +645,17 @@ class Annotator:
 				self.unsavedChanges = True
 				self.dispImg()
 				print("toggled difficulty")
+			elif k == 202:
+				self.showSettings()
+			elif 300 <= k < 300 + len(self.labelName):
+				if len(self.currentRectangles["drawnRectangles"][self.selectedRectInd]) < 6:
+					zerosToAdd = 7-len(self.currentRectangles["drawnRectangles"][self.selectedRectInd])
+					self.currentRectangles["drawnRectangles"][self.selectedRectInd] += [0] * zerosToAdd
+					print("added",zerosToAdd,"zeros", self.currentRectangles["drawnRectangles"][self.selectedRectInd])
+					self.unsavedChanges = True
+				self.currentRectangles["drawnRectangles"][self.selectedRectInd][6] = k-300
+				self.labelingInd = k - 300
+				self.dispImg()
 
 
 			else:
@@ -603,8 +685,6 @@ class Annotator:
 
 		self.dirInd = 0
 
-		self.subRectInd = 0
-		self.maxSubRects = 0
 		self.prelabeledInd = 0
 
 		self.frameNumInd = 0
@@ -618,7 +698,7 @@ class Annotator:
 			fileName = self.dirs[self.dirInd]
 			print("reading", fileName, "file number", self.dirInd+1, "out of", len(self.dirs))
 
-			self.jsonName = fileName[0:-4] + self.labelName + ".json"
+			self.jsonName = fileName[0:-4] + self.fileLabelName + ".json"
 			if self.jsonName in self.allFiles:
 				with open(self.path + '/' + self.jsonName) as json_file:
 					data = json.load(json_file)
@@ -626,26 +706,13 @@ class Annotator:
 				self.savableRects = data
 			else:
 				self.savableRects = {}
-				print("no annotation data found")
+				print("no annotation data called", self.jsonName)
 			self.unsavedChanges = False
 
-			if self.useSubRects:
-				self.largerRectNameJson = fileName[0:-4] + self.largerRectName + ".json"
-				if self.largerRectNameJson in self.allFiles:
-					with open(self.path + '/' + self.largerRectNameJson) as json_file:
-						data = json.load(json_file)
-					self.largerRects = data
-					self.rectFrames = [eval(i) for i in list(data.keys())] 
-					self.desiredFrameNum = int(self.rectFrames[0])-1
-
-				else:
-					print("no larger rectangles for", fileName, "called", self.largerRectNameJson)
-					print(self.allFiles)
-					self.dirInd+=1
-					continue
 
 
 			if fileName[-4::] in [".avi", ".mov", ".MOV"]:
+				self.fileType = "vid"
 				cap = cv2.VideoCapture(self.path + "/" + fileName)
 				self.maxFrameNum = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 				if self.maxFrameNum == 0:
@@ -660,6 +727,7 @@ class Annotator:
 					cap.set(1,self.desiredFrameNum)
 
 					ret, self.openImg = cap.read()
+
 
 					
 
@@ -682,99 +750,50 @@ class Annotator:
 						self.maxFrameNum = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
 						print("back in business!")
-
-					
-
 					
 
 					print("reading frame", self.frameNum, "out of", self.maxFrameNum)
 
 
-					if self.useSubRects:
-						if str(self.frameNum) not in self.savableRects:
-							self.savableRects[str(self.frameNum)] = {}
-							print("no premade rectangles")
-						else:
-							print("frame rects", self.savableRects[str(self.frameNum)])
+					if str(self.frameNum) in self.savableRects:
+						self.currentRectangles["drawnRectangles"] = self.savableRects[str(self.frameNum)][:]
+					elif self.useDetector:
+						self.detectPossible()
 
-						print("there are", len(self.rectFrames), "frames with rectangles")
-						self.subRectInd = 0
-						self.maxSubRects = len(self.largerRects[str(self.frameNum)])
-						ogImg = self.openImg.copy()
-						while self.subRectInd < self.maxSubRects and self.subRectInd >= 0:
-							if str(self.subRectInd) in self.savableRects[str(self.frameNum)]:
-								self.currentRectangles["drawnRectangles"] = self.savableRects[str(self.frameNum)][str(self.subRectInd)]
-								print("current rectangles", self.currentRectangles["drawnRectangles"])
-							else:
-								print("no rectangles found at", self.subRectInd, "in", self.savableRects[str(self.frameNum)])
+					self.dispImg()
+					self.getTransformationTypes()
+				
+					change, rectangles = self.manageKeyResponses()
 
-							print("reading rectangle", self.subRectInd+1, "out of", self.maxSubRects)
-							rect = self.largerRects[str(self.frameNum)][self.subRectInd]
-							self.openImg = ogImg[rect[1]:rect[3], rect[0]:rect[2]]
-							self.dispImg()
-							change, rectangles = self.manageKeyResponses()
-							self.subRectInd += change
-							if rectangles != []:
-								if str(self.frameNum) not in self.savableRects:
-									self.savableRects[str(self.frameNum)] = {}
-								self.savableRects[str(self.frameNum)][str(self.subRectInd)] = rectangles
-								print("added rectangles")
+					if len(rectangles) > 0:
+						self.savableRects[str(self.frameNum)] = rectangles
+					elif str(self.frameNum) in self.savableRects:
+						self.savableRects.pop(str(self.frameNum))
 
+					self.desiredFrameNum += change
 
-						frameInd = self.rectFrames.index(self.frameNum)
-						if self.subRectInd < 0:
-							frameInd -= 1
-							if frameInd < 0 and self.dirInd > 0:
-								self.dirInd += 1
-								print("going back a video", self.dirInd)
+					if change == 99999:
+						print("skippping")
+						while self.dirInd < len(self.dirs):
+							self.dirInd +=1
+							fileName = self.dirs[self.dirInd]
+							self.jsonName = fileName[0:-4] + self.fileLabelName + ".json"
+							if self.jsonName not in self.allFiles:
 								break
-							elif frameInd < 0:
-								print("dirind", self.dirInd)
-								print("can't go back any more")
-								frameInd += 1
+							print("dir ind",self.dirInd)
+						break
 
+					if self.desiredFrameNum >= self.maxFrameNum and self.maxFrameNum != 0:
+						print("video ended")
+						if self.dirInd < len(self.dirs):
+							self.dirInd += 1
+						break
+					elif self.desiredFrameNum < 0:
+						print("previous video")
+						if self.dirInd > 0:
+							self.dirInd -= 1
 
-						else:
-							frameInd += 1
-							if frameInd >= len(self.rectFrames):
-								self.dirInd += 1
-								if self.dirInd >= len(self.dirs):
-									print("no more videos")
-									self.dirInd -= 1
-								else:
-									print("going to next video")
-									break
-
-						self.desiredFrameNum = self.rectFrames[frameInd]-1
-
-					else:
-						if str(self.frameNum) in self.savableRects:
-							self.currentRectangles["drawnRectangles"] = self.savableRects[str(self.frameNum)][:]
-						elif self.useDetector:
-							self.detectPossible()
-
-						self.dispImg()
-					
-						change, rectangles = self.manageKeyResponses()
-
-						if len(rectangles) > 0:
-							self.savableRects[str(self.frameNum)] = rectangles
-						elif str(self.frameNum) in self.savableRects:
-							self.savableRects.pop(str(self.frameNum))
-
-						self.desiredFrameNum += change
-
-						if self.desiredFrameNum >= self.maxFrameNum and self.maxFrameNum != 0:
-							print("video ended")
-							if self.dirInd < len(self.dirs):
-								self.dirInd += 1
-							break
-						elif self.desiredFrameNum < 0:
-							print("previous video")
-							if self.dirInd > 0:
-								self.dirInd -= 1
-
-							break
+						break
 
 				cap.release()
 
@@ -782,19 +801,10 @@ class Annotator:
 
 
 			elif fileName[-4::] in [".png", ".jpg"]:
-				self.useSubRects = True
+				self.fileType = "img"
+			
 				self.openImg = cv2.imread(self.path + "/" + fileName)
 
-				self.jsonName = fileName[0:-4] + self.labelName + ".json"
-				if self.jsonName in self.allFiles:
-					with open(self.path + '/' + self.jsonName) as json_file:
-						data = json.load(json_file)
-					print("loaded in", data)
-					self.savableRects = data
-				else:
-					self.savableRects = {}
-					print("no annotation data found --- ")
-				self.unsavedChanges = False
 
 				self.frameNum = 1
 				if str(1) in self.savableRects:
@@ -808,11 +818,42 @@ class Annotator:
 
 				change, rectangles = self.manageKeyResponses()
 
-				if rectangles != []:
+				if change == 99999:
+					print("skippping")
+					while self.dirInd < len(self.dirs):
+						self.dirInd +=1
+						fileName = self.dirs[self.dirInd]
+						self.jsonName = fileName[0:-4] + self.fileLabelName + ".json"
+						if self.jsonName not in self.allFiles:
+							break
+						print("dir ind",self.dirInd)
+					print("going to", self.dirInd)
+				elif change == -99999:
+					print("skipping back")
+					while self.dirInd > 0:
+						self.dirInd -= 1
+						fileName = self.dirs[self.dirInd]
+						self.jsonName = fileName[0:-4] + self.fileLabelName + ".json"
+						if self.jsonName in self.allFiles:
+							break
+						print("dir ind",self.dirInd)
+					print("going to", self.dirInd)
+
+				else:
+					self.dirInd += change
+
+
+				if rectangles == []:
+					self.savableRects = {}
+					self.unsavedChanges = True
+				else:
 					self.savableRects["1"] = rectangles
 
-				self.dirInd += change
-				self.useSubRects = False
+
+				
+				if self.dirInd < 0:
+					print("cant go back more")
+					self.dirInd = 0
 
 			else:
 				print("unknown file type")
@@ -842,11 +883,15 @@ class Annotator:
 				with open(self.path + "/" + self.jsonName, 'w') as fileHandle:
 					fileHandle.write(str(jsonStr))
 					fileHandle.close()
+
 				print("Saving", jsonStr)
 				print("saved", self.jsonName)
+				if self.jsonName not in self.allFiles:
+					self.allFiles += [self.jsonName]
 
 			elif self.jsonName in self.allFiles:
 				os.remove(self.path + "/" + self.jsonName)
+				self.allFiles.remove(self.jsonName)
 				print("had saved something, nothing left so deleted it")
 			else:
 				print("nothing was saved, nothing to save")
@@ -857,13 +902,13 @@ class Annotator:
 
 	def saveImagesData(self):
 		# save just the cropped images
-		dirName = self.path + "/" + self.labelName + "_images"
+		dirName = self.path + "/" + self.fileLabelName + "_images"
 		if not os.path.exists(dirName):
 			os.makedirs(dirName)
 
 		rectsSaved = 0
 		for fileName in self.dirs:
-			jsonName = fileName[0:-4] + self.labelName + ".json"
+			jsonName = fileName[0:-4] + self.fileLabelName + ".json"
 			if jsonName in self.allFiles:
 
 				with open(self.path + '/' + jsonName) as json_file:
@@ -884,52 +929,147 @@ class Annotator:
 					for rectNum in data[str(frameNum)]:
 						i+=1
 						if rectNum[2] > rectNum[0] and rectNum[3] > rectNum[1]:
+							im = img[rectNum[1]:rectNum[3], rectNum[0]:rectNum[2]]
 
-							saveName = fileName[0:-4] + "_f" + str(frameNum) + "_r" + str(i) + ".jpg"
-							cv2.imwrite(dirName + "/" + saveName, img[rectNum[1]:rectNum[3], rectNum[0]:rectNum[2]])
-							if True:
-								cv2.imshow("saving", img[rectNum[1]:rectNum[3], rectNum[0]:rectNum[2]])
-								cv2.waitKey(1)
-							rectsSaved += 1
+							h, w = im.shape[0:2]
+							if h > 0 and w > 0:
+								scale = 1
+								if h < 300 and w < 300:
+									scale = max(400/h, 400/w)
+								im = cv2.resize(im, (int(scale * w), int(scale*h)), interpolation = cv2.INTER_AREA)
+								saveName = fileName[0:-4] + "_f" + str(frameNum) + "_r" + str(i) + ".jpg"
+
+								# cv2.imwrite(dirName + "/" + saveName, im)
+								if True:
+									cv2.imshow("saving", im)
+									cv2.waitKey(1)
+								rectsSaved += 1
 
 		cv2.destroyWindow('saving')
 		print("done saving", rectsSaved, "rectangles saved")
 
 
-	# def getSmallerImgs(self, img, allRects):
-	# 	h, w = img.shape[0:2]
-	# 	largerBndBoxs = []
-	# 	for rect in allRects:
-	# 		largerBndBoxs += [min(rect[0], 0), min(rect[1], 0), max(rect[2],w), max(rect[3], h)]
+	def transformImg(self, img, rects, transformations):
+
+		rectangles = []
+		for rect in rects:
+			rectangles += [rect[:]] # do a deep copy
+
+		h,w = img.shape[0:2]
+		res = img.copy()
+		# res = cv2.resize(res, (int(self.scale * w), int(self.scale*h)), interpolation = cv2.INTER_AREA)
+		# i=0
+		# while i < transformations[0]:
+		# 	res = cv2.rotate(res, cv2.ROTATE_90_CLOCKWISE)
+		# 	# if i == 0:
+		# 	h,w = img.shape[0:2]
+		# 	for r in rectangles:
+		# 		r[0:4] = [w/2 - (r[1] - h/2), h/2 + (r[0] - w/2),   w/2 - (r[3] - h/2), h/2 + (r[2] - w/2)]
+		# 	i+=1
+		
+		
+		
+
+		brightnessFactor = -20
+		if transformations[1] * brightnessFactor > 0:
+			res[res >= 255 - transformations[1] * brightnessFactor] = 255
+			res[res < 255] += transformations[1] * brightnessFactor
+		elif transformations[1] * brightnessFactor < 0:
+			res[res <= -transformations[1] * brightnessFactor] = 0
+			res[res > 0] -= -transformations[1] * brightnessFactor
 
 
-	# 	return saveRect
+		if transformations[2]==1: # horizontal
+			res = cv2.flip(res, 1)
+			for r in rectangles:
+				r[0:4] = [w-r[2], r[1], w-r[0], r[3]]
+
+		if transformations[3]==1:
+			res = cv2.flip(res, 0)
+			for r in rectangles:
+				r[0:4] = [r[0], h-r[3], r[2], h-r[1]]
+
+
+		# cv2.imshow("Res", res)
+		# cv2.waitKey(100)
+		return res, rectangles
+
+
+
+	def getTransformationTypes(self):
+		# self.transformations = {"rotate images":True, "change color spaces":True, "mirror horizontally":True, "mirror vertically": True, "save just labeled rectangles": True, "Include Pascal VOC label (XML)": True}
+		transformations = [[0,0,0,0]]
+
+		# if self.transformations["rotate images"] and False: # not working right now
+		# 	listToAdd = []
+		# 	for sublist in transformations:
+		# 		j = 1
+		# 		while j < 4:
+		# 			listToAdd += [sublist[:]]
+		# 			listToAdd[-1][0] = j
+		# 			j+=1
+		# 	transformations += listToAdd
+		# 	print("added", len(listToAdd))
+
+		if self.transformations["change color spaces"]:
+			listToAdd = []
+			for sublist in transformations:
+				brightnesses = (-2,-1,1,2)
+				for j in brightnesses:
+					listToAdd += [sublist[:]]
+					listToAdd[-1][1] = j
+			transformations += listToAdd
+			print("added", len(listToAdd))
+
+		if self.transformations["mirror horizontally"]:
+			listToAdd = []
+			for sublist in transformations:
+				listToAdd += [sublist[:]]
+				listToAdd[-1][2] = 1
+			transformations += listToAdd
+			print("added", len(listToAdd))
+
+		if self.transformations["mirror vertically"]:
+			listToAdd = []
+			for sublist in transformations:
+				listToAdd += [sublist[:]]
+				listToAdd[-1][3] = 1
+			transformations += listToAdd
+			print("added", len(listToAdd))
+
+
+		return transformations
+
+
+
+
 
 
 	def saveNormalDataXML(self):
 		self.saveDataJSON()
 
 		print("saving xml files")
-		trainDirName = self.path + "/" + self.labelName + "_train"
+		trainDirName = self.path + "/" + self.fileLabelName + "_train"
 		if not os.path.exists(trainDirName):
 			os.makedirs(trainDirName)
-		validDirName = self.path + "/" + self.labelName + "_validate"
+		validDirName = self.path + "/" + self.fileLabelName + "_validate"
 		if not os.path.exists(validDirName):
 			os.makedirs(validDirName)
 
 		showImgs = True
 		imgCount = 0
 		labelCount = 0
+		transformations = self.getTransformationTypes()
 		for fileName in self.dirs:
 
-			jsonName = fileName[0:-4] + self.labelName + ".json"
+			jsonName = fileName[0:-4] + self.fileLabelName + ".json"
 			if jsonName in self.allFiles:
 
 				with open(self.path + '/' + jsonName) as json_file:
 					data = json.load(json_file)
 				print("found data for", fileName)
 
-				if fileName[-4::] in [".mov", ".avi"]:
+				if fileName[-4::] in [".mov", ".MOV", ".avi"]:
 					frameNums = [eval(i) for i in list(data.keys())]
 					cap = cv2.VideoCapture(self.path + "/" + fileName)
 
@@ -954,27 +1094,62 @@ class Annotator:
 								cv2.imshow("saving", img)
 								cv2.waitKey(1)
 
-						cv2.imwrite(dirName + "/" + saveName, img)
+						
 
 						rects = data[str(frameNum)]
 						labelCount += len(rects)
 
-						saveTypes = [self.labelName] * len(rects)
-						self.saveXML(dirName, saveName, rects, saveTypes, img.shape[0:2])
+						saveTypes = []
+						for i in rects:
+							if len(i) > 6:
+								saveTypes += [self.labelName[i[6]]]
+							else:
+								saveTypes += self.labelName[0]
 
-				elif fileName[-4::] == ".jpg":
+
+						tNum = 0
+						for t in transformations:
+							sn = saveName[0:-4] + "_" + str(tNum) + saveName[-4::]
+							imWrite, r = self.transformImg(img, rects, t)
+							cv2.imwrite(dirName + "/" + sn, imWrite)
+							if self.transformations["Include Pascal VOC label (XML)"]:
+								self.saveXML(dirName,  sn, r, saveTypes, imWrite.shape[0:2])
+							tNum += 1
+
+				elif fileName[-4::] in [".jpg", ".png"]:
 
 					if "1" in data:
+
+						if imgCount%10 == 0:
+							dirName = validDirName
+						else:
+							dirName = trainDirName
+						imgCount += 1
+
 						print(data["1"])
 						rects = data["1"]
 						saveName = fileName
-						saveTypes = [self.labelName] * len(rects)
+
+						saveTypes = []
+						for i in rects:
+							if len(i) > 6:
+								saveTypes += [self.labelName[i[6]]]
+							else:
+								saveTypes += self.labelName[0]
+
 						img = cv2.imread(self.path + "/" + fileName)
 						cv2.imshow("saving", img)
 						cv2.waitKey(1)
 						labelCount += len(rects)
-						imgCount += 1
-						self.saveXML(self.path, saveName, rects, saveTypes, img.shape[0:2])
+
+						tNum = 0
+						for t in transformations:
+							sn = saveName[0:-4] + "_" + str(tNum) + saveName[-4::]
+							imWrite, r = self.transformImg(img, rects, t)
+							cv2.imwrite(dirName + "/" + sn, imWrite)
+							if self.transformations["Include Pascal VOC label (XML)"]:
+								self.saveXML(dirName,  sn, r, saveTypes, imWrite.shape[0:2])
+							tNum += 1
 				else:
 					print("unknown file", fileName, "type", fileName)
 			
@@ -982,8 +1157,6 @@ class Annotator:
 
 		if showImgs:
 			cv2.destroyWindow('saving')
-
-
 			
 		print("saved", labelCount, "labels from", imgCount, "frames")
 
@@ -996,7 +1169,7 @@ class Annotator:
 		labels = 0
 		numVideos = 0
 		for fileName in self.dirs:
-			jsonName = fileName[0:-4] + self.labelName + ".json"
+			jsonName = fileName[0:-4] + self.fileLabelName + ".json"
 			if jsonName in self.allFiles:
 				numVideos += 1
 				with open(self.path + '/' + jsonName) as json_file:
@@ -1004,8 +1177,6 @@ class Annotator:
 					imgs += len(data.keys())
 					for frameNum in data:
 						labels += len(data[frameNum])
-			# else:
-				# print("not found for", fileName)
 		self.numRects = labels
 		self.numImgs = imgs
 
@@ -1013,19 +1184,20 @@ class Annotator:
 
 	def saveXML(self, folder, fileName, rectangles, saveTypes, imshape):
 
-		text = """<annotation>
-		<folder>""" + folder + """</folder>
-		<filename>""" + fileName[0:-4] + ".jpg" + """</filename>
-		<path>""" + folder + "/"  + fileName[0:-4] + ".jpg" + """</path>
-		<source>
-		<database>Unknown</database>
-		</source>
-		<size>
-		<width>""" + str(imshape[1]) + """</width>
-		<height>""" + str(imshape[0]) + """</height>
-		<depth>3</depth>
-		</size>
-		<segmented>0</segmented>"""
+		text = """
+<annotation>
+\t<folder>""" + folder + """</folder>
+\t<filename>""" + fileName[0:-4] + ".jpg" + """</filename>
+\t<path>""" + folder + "/"  + fileName[0:-4] + ".jpg" + """</path>
+\t<source>
+\t\t<database>Unknown</database>
+\t</source>
+\t<size>
+\t\t<width>""" + str(imshape[1]) + """</width>
+\t\t<height>""" + str(imshape[0]) + """</height>
+\t\t<depth>3</depth>
+\t</size>
+\t<segmented>0</segmented>\n"""
 
 		i=0
 		while i < len(rectangles):
@@ -1052,21 +1224,24 @@ class Annotator:
 					pose = "90"
 			truncated = 0
 			difficult = 0
-			if len(l) == 6:
+			if len(l) > 5:
+
 				truncated = l[4]
 				difficult = l[5]
 
-			text += """<object>
-			<name>""" + saveTypes[i] + """</name>
-			<pose>""" + pose + """</pose>
-			<truncated>""" + str(truncated) + """</truncated>
-			<difficult>"""+ str(difficult) + """</difficult>
-			<bndbox>
-			<xmin>""" + str(bb[0]) + """</xmin>
-			<xmax>""" + str(bb[2]) + """</xmax>
-			<ymin>""" + str(bb[1]) + """</ymin>
-			<ymax>""" + str(bb[3]) + """</ymax>
-			</bndbox>"""
+
+			text += """
+\t<object>
+\t\t<name>""" + saveTypes[i] + """</name>
+\t\t<pose>""" + pose + """</pose>
+\t\t<truncated>""" + str(truncated) + """</truncated>
+\t\t<difficult>"""+ str(difficult) + """</difficult>
+\t\t<bndbox>
+\t\t\t<xmin>""" + str(min(bb[0], bb[2])) + """</xmin>
+\t\t\t<xmax>""" + str(max(bb[0], bb[2])) + """</xmax>
+\t\t\t<ymin>""" + str(min(bb[1], bb[3])) + """</ymin>
+\t\t\t<ymax>""" + str(max(bb[1], bb[3])) + """</ymax>
+\t\t</bndbox>"""
 
 			if type(l[0]) == list:
 				text += "\n<polygon>\n"
@@ -1078,10 +1253,10 @@ class Annotator:
 					j+=1
 				text += "</polygon>"
 					
-			text += "\n</object>"
+			text += "\n\t</object>"
 			i+=1
 
-		text += """\n</annotation>"""
+		text += "\n</annotation>"
 
 
 		fileName = fileName[0:-4] + ".xml"
@@ -1126,9 +1301,10 @@ class Annotator:
 		print("done")
 
 
-
-
-
-
-annot = Annotator(videosPath, saveName, modelName, largerRectName)
-annot.goThroughDir()
+if __name__ == "__main__":
+	if modelName != "":
+		from tflite_support.task import core
+		from tflite_support.task import processor
+		from tflite_support.task import vision
+	annot = Annotator(videosPath, saveName, modelName)
+	annot.goThroughDir()
