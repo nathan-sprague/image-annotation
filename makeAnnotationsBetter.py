@@ -1,3 +1,9 @@
+import os
+import cv2
+import json
+import numpy as np
+import math
+import time
 
 
 class Annotator:
@@ -26,6 +32,14 @@ class Annotator:
 		self.numImgs = 0
 
 		self.labelingInd = 0
+
+		self.makeAngles = True
+		self.makingAngleLine = False
+		self.sectionStep = 90
+		self.sectionLabels = [str(int(360-self.sectionStep/2)) + "-" + str(int(self.sectionStep/2-1))]
+
+		for i in range(0, int(360/self.sectionStep)):
+			self.sectionLabels += [str(int(i*self.sectionStep+self.sectionStep/2)) + "-" + str(int((i+1)*self.sectionStep+self.sectionStep/2 -1))]
 
 
 		self.falseKey = -1
@@ -127,11 +141,8 @@ class Annotator:
 		img = cv2.putText(img, "Export!", (445, 540), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2, cv2.LINE_AA)
 
 
-
 		cv2.imshow("export settings", img)
 		cv2.setMouseCallback("export settings", self.settingsEventHandler)
-
-
 
 
 
@@ -160,60 +171,25 @@ class Annotator:
 		x = int(x/self.scale)
 		y = int(y/self.scale)
 
-		if self.polygonMode:
-			self.processPolygonMouseEvent(event, x, y)
-		else:
-			self.processRectangleMouseEvent(event, x, y)
 
-
-	def processPolygonMouseEvent(self, event, x, y):
-		tempRect = self.currentRectangles["tempRectangle"][0]
-		if event == 1:
-			print("click", tempRect)
-			if len(tempRect) == 0:
-				self.currentRectangles["tempRectangle"][0] = [(x,y)]
-			self.mouseDown = True
-			self.selectedRectInd = -1
-		elif event == 4:
-			self.mouseDown = False
-			if len(tempRect) == 1: # first click
-				print("temp", tempRect)
-				tempRect = tempRect[0]
-				
-
-				self.checkDetection(tempRect)
-
-				if self.selectedRectInd == -1:
-					print("didn't select anything")
-					self.currentRectangles["tempRectangle"][0] += [(x,y)]
-					print(self.currentRectangles["tempRectangle"][0])
-				else:
-					self.currentRectangles["tempRectangle"] = [[]]
-					self.dispImg()
-			else:
-				firstPt = tempRect[0]
-				lastPt = tempRect[-1]
-				if abs(firstPt[0]-lastPt[0]) < 5 and abs(firstPt[1]-lastPt[1]) < 5:
-					print("made rectangle")
-					self.currentRectangles["tempRectangle"] = [[]]
-					self.currentRectangles["drawnRectangles"] += [tempRect[0:-1]]
-					self.unsavedChanges = True
-					self.dispImg()
-				else:
-					self.currentRectangles["tempRectangle"][0] += [(x,y)]
-
-		elif event == 0 and not self.mouseDown:
-			if len(tempRect) > 1:
-				self.currentRectangles["tempRectangle"][0][-1] = (x,y)
-				self.dispImg()
-
+		self.processRectangleMouseEvent(event, x, y)
 
 	def processRectangleMouseEvent(self, event, x, y):
 
 		if event==1:
+			self.mouseDown = True
+
+			if self.makeAngles and self.selectedRectInd != -1:
+				s = self.currentRectangles["selectedRect"][0]
+				if s[0] < x < s[2] and s[1] < y < s[3]: 
+					self.makingAngleLine = True
+					self.currentRectangles["tempRectangle"][0] = [x,y,x,y]
+
+					return
+
 			self.selectedRectInd = -1
 			self.currentRectangles["selectedRect"] = []
-			self.mouseDown = True
+			
 			if len(self.labelName) > 1:
 				self.currentRectangles["tempRectangle"][0] = [x,y,x,y,0,0,self.labelingInd]
 			else:
@@ -221,12 +197,21 @@ class Annotator:
 
 		elif event==4:
 			self.mouseDown = False
+
 			tempRect = self.currentRectangles["tempRectangle"][0]
 			if len(tempRect) > 0:
 
-				if abs(tempRect[0] - tempRect[2]) > 5 and abs(tempRect[1]-tempRect[3]) > 5:
-			
+				if self.makingAngleLine and ( abs(tempRect[0] - tempRect[2]) > 5 or abs(tempRect[1]-tempRect[3]) > 5):
+						extraZeros = [0]*(10-len(self.currentRectangles["drawnRectangles"][self.selectedRectInd]))
+						self.currentRectangles["drawnRectangles"][self.selectedRectInd] += extraZeros
+						self.currentRectangles["drawnRectangles"][self.selectedRectInd][6] = tempRect[0]
+						self.currentRectangles["drawnRectangles"][self.selectedRectInd][7] = tempRect[1]
+						self.currentRectangles["drawnRectangles"][self.selectedRectInd][8] = tempRect[2]
+						self.currentRectangles["drawnRectangles"][self.selectedRectInd][9] = tempRect[3]
+						print("finished making arrow", self.currentRectangles["drawnRectangles"][self.selectedRectInd])
+						self.unsavedChanges = True
 
+				elif abs(tempRect[0] - tempRect[2]) > 5 and abs(tempRect[1]-tempRect[3]) > 5:
 					self.currentRectangles["drawnRectangles"] += [
 					[min(tempRect[0], tempRect[2]), min(tempRect[1], tempRect[3]), max(tempRect[0], tempRect[2]), max(tempRect[1], tempRect[3]), 0, 0, self.labelingInd]]
 					print("Made rectangle")
@@ -247,6 +232,8 @@ class Annotator:
 
 			else:
 				print("no Rectangle to be made")
+
+			self.makingAngleLine = False
 
 			self.currentRectangles["tempRectangle"][0] = []
 
@@ -353,8 +340,21 @@ class Annotator:
 							else:
 								drawImg = cv2.putText(drawImg, self.labelName[0][0], center, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
 
+						if len(rect) > 8 and self.makeAngles:
+							angle = self.getAngle(rect)
 
-						drawImg = cv2.rectangle(drawImg, (int(rect[0]*self.scale), int(rect[1]*self.scale)), (int(rect[2]*self.scale), int(rect[3]*self.scale)), colors[rectType], thicknesses[rectType])
+							center = (int((rect[0]+rect[2])*self.scale/2), int((rect[1]+rect[3])*self.scale/2))
+							drawImg = cv2.putText(drawImg, str(angle), center, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
+
+							drawImg = cv2.arrowedLine(drawImg, (int(rect[6]*self.scale), int(rect[7]*self.scale)), (int(rect[8]*self.scale), int(rect[9]*self.scale)), colors[rectType], thicknesses[rectType])
+					
+
+
+						if self.makingAngleLine and rectType == "tempRectangle":
+							drawImg = cv2.line(drawImg, (int(rect[0]*self.scale), int(rect[1]*self.scale)), (int(rect[2]*self.scale), int(rect[3]*self.scale)), colors[rectType], thicknesses[rectType])
+
+						else: 
+							drawImg = cv2.rectangle(drawImg, (int(rect[0]*self.scale), int(rect[1]*self.scale)), (int(rect[2]*self.scale), int(rect[3]*self.scale)), colors[rectType], thicknesses[rectType])
 					
 
 					else:
@@ -967,8 +967,6 @@ class Annotator:
 		# 		r[0:4] = [w/2 - (r[1] - h/2), h/2 + (r[0] - w/2),   w/2 - (r[3] - h/2), h/2 + (r[2] - w/2)]
 		# 	i+=1
 		
-		
-		
 
 		brightnessFactor = -20
 		if transformations[1] * brightnessFactor > 0:
@@ -1100,11 +1098,17 @@ class Annotator:
 						labelCount += len(rects)
 
 						saveTypes = []
-						for i in rects:
-							if len(i) > 6:
-								saveTypes += [self.labelName[i[6]]]
-							else:
-								saveTypes += self.labelName[0]
+						if self.makeAngles:
+							for i in rects:
+								angle = self.getAngle(i)
+								saveTypes += [self.sectionLabels[self.getAngleCategory(angle)]]
+						else:
+							for i in rects:
+								if len(i) > 6:
+									saveTypes += [self.labelName[i[6]]]
+								else:
+									saveTypes += self.labelName[0]
+
 
 
 						tNum = 0
@@ -1131,11 +1135,17 @@ class Annotator:
 						saveName = fileName
 
 						saveTypes = []
-						for i in rects:
-							if len(i) > 6:
-								saveTypes += [self.labelName[i[6]]]
-							else:
-								saveTypes += self.labelName[0]
+
+						if self.makeAngles:
+							for i in rects:
+								angle = self.getAngle(i)
+								saveTypes += [self.sectionLabels[self.getAngleCategory(angle)]]
+						else:
+							for i in rects:
+								if len(i) > 6:
+									saveTypes += [self.labelName[i[6]]]
+								else:
+									saveTypes += self.labelName[0]
 
 						img = cv2.imread(self.path + "/" + fileName)
 						cv2.imshow("saving", img)
@@ -1164,10 +1174,26 @@ class Annotator:
 		print("Saved all")
 
 
+	def getAngle(self, rect):
+		# get the angle assuming rect is [x, x, x, x, x, (x1), (y1), (x2), (y2)]. Returns in degrees
+		angle = 0
+		if rect[6] != rect[8]:
+			angle = math.degrees(math.atan((rect[9]-rect[7])/(rect[8]-rect[6])))
+			if rect[6]<rect[8]: # right
+				angle += 90
+			else: # left
+				angle += 270
+		elif rect[7] > rect[9]:
+			angle = 0
+		else:
+			angle = 180
+		return int(angle)
+
 	def countLabels(self):
 		imgs = 0
 		labels = 0
 		numVideos = 0
+		allAngles = []
 		for fileName in self.dirs:
 			jsonName = fileName[0:-4] + self.fileLabelName + ".json"
 			if jsonName in self.allFiles:
@@ -1177,8 +1203,39 @@ class Annotator:
 					imgs += len(data.keys())
 					for frameNum in data:
 						labels += len(data[frameNum])
+						if self.makeAngles:
+							for rect in data[frameNum]:
+								if len(rect) > 8:
+									allAngles += [self.getAngle(rect)]
+								else:
+									print("unlabeled rectangle found on frame", frameNum, "of video", fileName)
 		self.numRects = labels
 		self.numImgs = imgs
+
+		
+		if self.makeAngles:
+			sections = [0] * 40
+			for angle in allAngles:
+				angleCategory = self.getAngleCategory(angle)
+				sections[angleCategory] +=1
+
+			print("section distribution", sections, self.sectionLabels)
+
+
+
+
+	def getAngleCategory(self, angle):
+			
+		if angle >= 360-self.sectionStep/2 or angle < self.sectionStep/2:
+			return 0
+			# print("angle", angle, "in section", sectionLabels[0])
+		else:
+			res = angle - self.sectionStep/2
+			res = int(res/self.sectionStep)+1
+			return res
+			# print("angle", angle, "in section", sectionLabels[res])
+
+
 
 
 
