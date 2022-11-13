@@ -414,7 +414,7 @@ class Annotator:
 
 	def dispImg(self):
 		drawImg = self.openImg.copy()
-		self.squareImg(self.openImg, self.currentRectangles["drawnRectangles"],500)
+		# self.squareImg(self.openImg, self.currentRectangles["drawnRectangles"],500)
 		# (720, 1280, 3)
 		h, w = drawImg.shape[0:2]
 		self.scale = 1
@@ -1539,14 +1539,15 @@ class Annotator:
 			dims = rectangles[i][1:7]
 			dx = dims[4]-dims[2]
 			dy = dims[5]-dims[3]
-			dims += [dims[4]+dx, dims[5]+dy]
+			dims += [dims[0]+dx, dims[1]+dy]
 			for j in dims:
-				text+= str(j) + " "
+				text += str(j) + " "
 			text += saveTypes[i] + " 0\n"
 			i+=1
 		with open(fileName, 'w') as fileHandle:
 			fileHandle.write(text)
 			fileHandle.close()
+
 
 
 
