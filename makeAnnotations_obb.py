@@ -4,6 +4,7 @@ import json
 import numpy as np
 import math
 import time
+import random
 
 saveName = ["earSlant"]
 largerRectName = ""
@@ -414,7 +415,7 @@ class Annotator:
 
 	def dispImg(self):
 		drawImg = self.openImg.copy()
-		# self.squareImg(self.openImg, self.currentRectangles["drawnRectangles"],500)
+		self.squareImg(self.openImg, self.currentRectangles["drawnRectangles"],500)
 		# (720, 1280, 3)
 		h, w = drawImg.shape[0:2]
 		self.scale = 1
@@ -780,7 +781,7 @@ class Annotator:
 		self.allFiles = os.listdir(self.path)
 		self.dirs = []
 		for i in self.allFiles:
-			if i[-4::] in [".avi", ".png", ".jpg", ".mov", ".MOV"]:
+			if i[-4::] in [".avi", ".png", ".jpg", ".mov", ".MOV", "mp4"]:
 				self.dirs += [i]
 		self.countLabels()
 
@@ -1156,7 +1157,9 @@ class Annotator:
 			i=0
 			mainFolder = self.path + "/yolo_"+self.fileLabelName
 			if os.path.exists(mainFolder):
-				os.rmdir(mainFolder)
+				os.rename(mainFolder, mainFolder+"_old" + str(random.randint(0,100)))
+				# os.rmdir(mainFolder)
+
 			os.makedirs(mainFolder)
 
 			while i < len(dirNames):
@@ -1212,11 +1215,8 @@ class Annotator:
 						rects = data[str(frameNum)]
 
 						if saveFormat == "yolo":
-							img, rects = self.squareImg(img, rects, 500)
-							if rects == False:
-								print("not using")
-								missed += 1
-								continue
+							imgs, allRects = self.squareImg(img, rects, 500)
+							
 
 							if imgCount%10 == 0:
 								dirName = dirNames[1] # validate
@@ -1228,73 +1228,80 @@ class Annotator:
 
 
 						else:
+							allRects = [rects]
+							imgs = [img]
 							if imgCount%10 == 0:
 								dirName = validDirName
 							else:
 								dirName = trainDirName
 						
-						saveName = fileName[0:-4] + "_f" + str(frameNum) + ".jpg"
+						count = 0
+						print("\nall rects", allRects)
+						while count < len(allRects):
+							rects = allRects[count]
+							img = imgs[count]
+							print("rects", rects)
+							count+=1
+							saveName = fileName[0:-4] + "_f" + str(frameNum) + ".jpg"
 
-						imgCount += 1
-
-						
-						
-
-						
-						if not ret:
-							print("no frame found at frame number", frameNum)
-							break
-
-						if showImgs:
-							if imgCount%10 == 0:
-								cv2.imshow("saving", img)
-								cv2.waitKey(1)
+							imgCount += 1
 
 
-						
-						labelCount += len(rects)
+							
+							if not ret:
+								print("no frame found at frame number", frameNum)
+								break
 
-						saveTypes = []
-						skip = False
-						if self.makeAngles:
-							for i in rects:
-								angle = self.getAngle(i)
-								if angle == False:
-									print("no angle found for frame, skipping.")
-									skip = True
-									break
-								j=0
-								while j < len(self.sectionLabels):
-									if self.sectionLabels[j][0]<=angle<self.sectionLabels[j][1]:
-										saveTypes += [str(self.sectionLabels[j][0]) + "_" + str(self.sectionLabels[j][1])]
+							if showImgs:
+								if imgCount%10 == 0:
+									cv2.imshow("saving", img)
+									cv2.waitKey(1)
+
+
+							
+							labelCount += len(rects)
+
+							saveTypes = []
+							skip = False
+							if self.makeAngles:
+								for i in rects:
+									angle = self.getAngle(i)
+									if angle == False:
+										print("no angle found for frame, skipping.")
+										skip = True
 										break
-									j+=1
-								if j == len(self.sectionLabels):
-									print("Section label never added for angle", angle)
-						else:	
-							for i in rects:
-								if len(i) > 6 and not self.makeSlant:
-									saveTypes += [self.labelName[i[6]]]
-								else:
-									saveTypes += [self.labelName[0]]
-
-						if not skip:
-
-							tNum = 0
-							for t in transformations:
-								sn = saveName[0:-4] + "_" + str(tNum) + saveName[-4::]
-								imWrite, r = self.transformImg(img, rects, t)
-								if saveFormat == "yolo":
-									cv2.imwrite(dirName + "/images/" + sn, imWrite)
-								else:
-									cv2.imwrite(dirName + "/" + sn, imWrite)
-
-								if self.transformations["Include Pascal VOC label (XML)"]:
-									if saveFormat == "yolo":
-										self.saveYOLO(dirName+"/labelTxt/" + sn[0:-4] + ".txt", r, saveTypes)
+									j=0
+									while j < len(self.sectionLabels):
+										if self.sectionLabels[j][0]<=angle<self.sectionLabels[j][1]:
+											saveTypes += [str(self.sectionLabels[j][0]) + "_" + str(self.sectionLabels[j][1])]
+											break
+										j+=1
+									if j == len(self.sectionLabels):
+										print("Section label never added for angle", angle)
+							else:	
+								for i in rects:
+									if len(i) > 6 and not self.makeSlant:
+										saveTypes += [self.labelName[i[6]]]
 									else:
-										self.saveXML(dirName,  sn, r, saveTypes, imWrite.shape[0:2])
-								tNum += 1
+										saveTypes += [self.labelName[0]]
+
+							if not skip:
+
+								tNum = 0
+								for t in transformations:
+									sn = saveName[0:-4] + "_" + str(tNum) + saveName[-4::]
+									imWrite, r = self.transformImg(img, rects, t)
+									if saveFormat == "yolo":
+										cv2.imwrite(dirName + "/images/" + sn, imWrite)
+									else:
+										cv2.imwrite(dirName + "/" + sn, imWrite)
+
+									if self.transformations["Include Pascal VOC label (XML)"]:
+										if saveFormat == "yolo":
+											self.saveYOLO(dirName+"/labelTxt/" + sn[0:-4] + ".txt", r, saveTypes)
+										else:
+											self.saveXML(dirName,  sn, r, saveTypes, imWrite.shape[0:2])
+									tNum += 1
 
 				elif fileName[-4::] in [".jpg", ".png"]:
 
@@ -1351,10 +1358,13 @@ class Annotator:
 
 
 	def squareImg(self, img, rects, finalSize):
+
 		if len(rects) == 0:
-			return False, False
+			return [], []
 		# for only slanted rects. may modify for all rects later
 		h, w = img.shape[0:2]
+		for i in rects:
+			i = [-2, min(max(i[1],0),w), min(max(i[2],0),h), min(max(i[3],0),w), min(max(i[4],0),h),  min(max(i[5],0),w), min(max(i[6],0),h)]
 		smallestSizes = [w, h]
 		largestSizes = [0, 0]
 		for r in rects:
@@ -1367,8 +1377,65 @@ class Annotator:
 				i+=2
 		smallestSquare = (abs(largestSizes[0]-smallestSizes[0]), abs(largestSizes[1]-smallestSizes[1]))
 		if max(smallestSquare) > min(h, w):
-			print("too hard to shrink. smallest square", smallestSquare, (h,w))
-			return False, False
+
+			# print("too hard to shrink. smallest square", smallestSquare, (h,w))
+
+			if len(rects)==1:
+				# print("no more rects to divide")
+				return [], []
+			
+			rects.sort(key = lambda x: min(x[1], x[3]))
+
+			i = len(rects)-1
+			div = -1
+			rightRects = []
+			while i > 0:
+				rightRects += [rects[i][:]]
+				if max(rects[i-1][1], rects[i-1][3], rects[i-1][5]) <  max(rects[i][1], rects[i][3], rects[i][5]):
+					div = int((max(rects[i-1][1], rects[i-1][3], rects[i-1][5]) +  max(rects[i][1], rects[i][3], rects[i][5]))/2)
+					break
+				
+				i-=1
+
+			leftRects = rects[0:i]
+
+			if div < 0:
+				# print("dividing point less than 0")
+				return [],[]
+
+			# img = cv2.line(img, (div,0), (div,h), (0,0,0),5)
+			# cv2.imshow("split", img)
+
+
+
+			allRects = []
+			allImgs = []
+
+			# print("processing left rect")
+			img2, newRects = self.squareImg(img[:, 0:div].copy(), leftRects, finalSize)
+			if newRects != []:
+				allImgs += img2
+				allRects += newRects
+
+			for rect in rightRects:
+				rect[1] -= div
+				rect[3] -= div
+				rect[5] -= div
+			# print("rrect", rightRects)
+
+			# print("processing right rect")
+			img2, newRects = self.squareImg(img[:, div::].copy(), rightRects, finalSize)
+			# print("done processing", newRects)
+			if newRects != []:
+				allImgs += img2
+				allRects += newRects
+
+
+
+			return allImgs, allRects
+
+
+			
 		else:
 			cropSize = min(h, w)
 			center = [(smallestSizes[0] + largestSizes[0])/2, (smallestSizes[1] + largestSizes[1])/2]
@@ -1390,8 +1457,8 @@ class Annotator:
 			crop = cv2.resize(crop, (finalSize, finalSize), interpolation = cv2.INTER_AREA)
 			# scale = 1
 
-			cv2.line(img, (0, startFromBack[1]), (w, startFromBack[1]), (0,0,0), 2)
-			cv2.line(img, (startFromBack[0], 0), (startFromBack[0], h), (0,0,0), 2)
+			# cv2.line(img, (0, startFromBack[1]), (w, startFromBack[1]), (0,0,0), 2)
+			# cv2.line(img, (startFromBack[0], 0), (startFromBack[0], h), (0,0,0), 2)
 			newRects = []
 			for i in rects:
 				rect = [0,0,0,0,0,0]
@@ -1403,9 +1470,11 @@ class Annotator:
 				# pts = np.array([[rect[0], rect[1]], [rect[2], rect[3]], [rect[4], rect[5]]], np.int32)
 				# crop = cv2.polylines(crop, [pts], True, (255,255,0), 3)
 
+			# num = random.randint(0,10)
+			# print("cropped", num)
 			# cv2.imshow("cropped", crop)
 
-			return crop, newRects
+			return [crop], [newRects]
 
 
 
