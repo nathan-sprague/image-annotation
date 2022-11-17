@@ -4,10 +4,17 @@ import json
 import numpy as np
 import math
 import time
+import random
+
+saveName = ["earSlant"]
+modelName = ""
+makeSlant = False
+makeAngles = False
+
 
 
 class Annotator:
-	def __init__(self, path, labelName, modelName=""):
+	def __init__(self, path, labelName, modelName="", makeSlant=False, makeAngles=False):
 		self.currentRectangles = {"drawnRectangles": [], "tempRectangle": [[]], "possibleRectangles": [], "selectedRect": []}
 		self.firstCallback = True
 		self.path = path
@@ -25,7 +32,6 @@ class Annotator:
 		self.scale = 1
 		self.mouseDown = False
 
-		self.polygonMode = False
 
 
 		self.numRects = 0
@@ -33,13 +39,13 @@ class Annotator:
 
 		self.labelingInd = 0
 
-		self.makeAngles = True
+		self.makeAngles = makeAngles
 		self.makingAngleLine = False
-		self.sectionStep = 90
-		self.sectionLabels = [str(int(360-self.sectionStep/2)) + "-" + str(int(self.sectionStep/2-1))]
+		self.minSectionStep = 5
+		self.minSectionCount = 80
+		self.sectionLabels = []
 
-		for i in range(0, int(360/self.sectionStep)):
-			self.sectionLabels += [str(int(i*self.sectionStep+self.sectionStep/2)) + "-" + str(int((i+1)*self.sectionStep+self.sectionStep/2 -1))]
+		self.makeSlant = makeSlant
 
 
 		self.falseKey = -1
@@ -62,6 +68,7 @@ class Annotator:
 		self.buttons = self.defaultButtons
 
 		self.sideBarWidth = 200
+		self.borderSize = 50
 
 		self.useDetector = False
 		if modelName != "":
@@ -98,7 +105,10 @@ class Annotator:
 				if self.transformations["save just labeled rectangles"]:
 					self.saveImagesData()
 				else:
-					self.saveNormalDataXML()
+					if self.makeSlant:
+						self.saveNormalData("yolo")
+					else:
+						self.saveNormalData("xml")
 
 
 	def showSettings(self):
@@ -147,6 +157,9 @@ class Annotator:
 
 
 	def mouseEvent(self, event, x, y, flags, param):
+
+		
+
 		if x < self.sideBarWidth:
 			if event == 4 and self.currentRectangles["tempRectangle"] == [[]]:
 				self.mouseDown = False
@@ -163,7 +176,10 @@ class Annotator:
 
 
 		x-=self.sideBarWidth
-		self.sideBarWidth=max(0, self.sideBarWidth)
+		x -= self.borderSize
+		y -= self.borderSize
+		
+		# x=max(0, self.sideBarWidth)
 		if event == 6:
 			self.falseKey = 108 # skip 5 frames if mouse wheel clicked
 
@@ -173,6 +189,8 @@ class Annotator:
 
 
 		self.processRectangleMouseEvent(event, x, y)
+
+
 
 	def processRectangleMouseEvent(self, event, x, y):
 
@@ -189,17 +207,42 @@ class Annotator:
 
 			self.selectedRectInd = -1
 			self.currentRectangles["selectedRect"] = []
+
+
+			if self.makeSlant and len(self.currentRectangles["tempRectangle"][0]) > 0:
+				tr = self.currentRectangles["tempRectangle"][0]
+				if tr[5] != -10000:
+					if (tr[3]-tr[5])**2 + (tr[4]-tr[6])**2 > 25:
+					
+						print("finished making rectangle")
+						self.currentRectangles["drawnRectangles"] += [tr]
+						self.currentRectangles["tempRectangle"][0] = []
+						self.unsavedChanges = True
+						self.numRects += 1
+					else:
+						print("rectangle too small")
+						self.currentRectangles["tempRectangle"][0] = []
+					self.dispImg()
+
 			
-			if len(self.labelName) > 1:
-				self.currentRectangles["tempRectangle"][0] = [x,y,x,y,0,0,self.labelingInd]
+			elif len(self.labelName) > 1:
+				if self.makeSlant:
+					self.currentRectangles["tempRectangle"][0] = [-2000, x,y,x,y,-10000,0,self.labelingInd]
+				else:
+					self.currentRectangles["tempRectangle"][0] = [x,y,x,y,0,0,self.labelingInd]
 			else:
-				self.currentRectangles["tempRectangle"][0] = [x,y,x,y,0,0]
+				if self.makeSlant:
+					self.currentRectangles["tempRectangle"][0] = [-2000, x,y,x,y,-10000,0]
+				else:
+					self.currentRectangles["tempRectangle"][0] = [x,y,x,y,0,0]
 
 		elif event==4:
 			self.mouseDown = False
 
 			tempRect = self.currentRectangles["tempRectangle"][0]
 			if len(tempRect) > 0:
+
+
 
 				if self.makingAngleLine and ( abs(tempRect[0] - tempRect[2]) > 5 or abs(tempRect[1]-tempRect[3]) > 5):
 						extraZeros = [0]*(10-len(self.currentRectangles["drawnRectangles"][self.selectedRectInd]))
@@ -210,6 +253,18 @@ class Annotator:
 						self.currentRectangles["drawnRectangles"][self.selectedRectInd][9] = tempRect[3]
 						print("finished making arrow", self.currentRectangles["drawnRectangles"][self.selectedRectInd])
 						self.unsavedChanges = True
+
+				elif self.makeSlant and tempRect[5] == -10000:
+					print("starting next part")
+					tr = self.currentRectangles["tempRectangle"][0]
+					if (tr[1]-tr[3])**2 + (tr[2] - tr[4])**2 < 25:
+						print("rect too small")
+						self.currentRectangles["tempRectangle"] = [[]]
+						self.checkDetection(tempRect)
+					else:
+						self.currentRectangles["tempRectangle"][0][5] = x
+						self.currentRectangles["tempRectangle"][0][5] = y
+					return
 
 				elif abs(tempRect[0] - tempRect[2]) > 5 and abs(tempRect[1]-tempRect[3]) > 5:
 					self.currentRectangles["drawnRectangles"] += [
@@ -233,35 +288,90 @@ class Annotator:
 			else:
 				print("no Rectangle to be made")
 
+
 			self.makingAngleLine = False
 
 			self.currentRectangles["tempRectangle"][0] = []
 
 		elif event == 0 and self.mouseDown:
-			
 			h, w = self.openImg.shape[0:2]
-			if len(self.currentRectangles["tempRectangle"][0]) > 1:
-				self.currentRectangles["tempRectangle"][0][2] = min(max(x,0),w)
-				self.currentRectangles["tempRectangle"][0][3] = min(max(y,0),h)
+			
 
+			if len(self.currentRectangles["tempRectangle"][0]) > 1:
+				if self.makeSlant:
+					self.currentRectangles["tempRectangle"][0][3] = x#min(max(x,0),w)
+					self.currentRectangles["tempRectangle"][0][4] = y#min(max(y,0),h)
+				else:
+					self.currentRectangles["tempRectangle"][0][2] = min(max(x,0),w)
+					self.currentRectangles["tempRectangle"][0][3] = min(max(y,0),h)
 			self.dispImg()
+		elif event == 0 and self.makeSlant and len(self.currentRectangles["tempRectangle"][0]) > 0:
+
+			tr = self.currentRectangles["tempRectangle"][0]
+			if tr[5] != -10000:
+				# print("dragging angle")
+				angle = self.getAngle2pts((tr[1], tr[2]), (tr[3], tr[4]))
+				angle2 = self.getAngle2pts((tr[3], tr[4]), (x,y))
+				
+				if (math.degrees(angle-angle2)%360) < 180:
+
+					angle = angle-math.pi
+
+				d = math.sqrt((x-tr[3])**2 + (y-tr[4])**2)
+				print("D", d,math.degrees(angle))
+
+
+				self.currentRectangles["tempRectangle"][0][5] = tr[3] + int(math.cos(angle)*d)
+				self.currentRectangles["tempRectangle"][0][6] = tr[4] + int(math.sin(angle)*d)
+				print("cr", self.currentRectangles["tempRectangle"][0])
+				self.dispImg()
+
+	def getAngle2pts(self, pt1, pt2):
+		# returns in radians
+		angle = 0
+		if pt1[0] != pt2[0]:
+			angle = (math.atan((pt1[1]-pt2[1])/(pt1[0]-pt2[0])))
+			up = False
+			left = False
+			if pt2[0]<pt1[0]: # left
+				angle = angle + math.pi*1.5
+			else:
+				angle = math.pi/2 + angle
+
+		elif pt2[1] < pt1[1]:
+			angle = 0
+		else:
+			angle = math.pi
+		if angle < math.pi:
+			pass
+			# print("minus", math.degrees(angle))
+			# angle = math.pi-angle
+		return angle
+
 
 	def checkDetection(self, tempRect):
 		ind = 0
+		print("checking")
+		self.selectedRectInd = -1
+		self.currentRectangles["selectedRect"] = [[]]
 
 		for rect in self.currentRectangles["drawnRectangles"]:
 			inside = False
-			if type(rect[0]) == int:
+			if rect[0] == -2000:
+				if tempRect[1] > min(rect[1],rect[3],rect[5]) and tempRect[1] < max(rect[1],rect[3],rect[5]):
+					
+					if tempRect[2] > min(rect[2],rect[4],rect[6]) and tempRect[2] < max(rect[2],rect[4],rect[6]):
+						inside = True
+			else:
 				if tempRect[0] > rect[0] and tempRect[0] < rect[2]:
 					if tempRect[1] > rect[1] and tempRect[1] < rect[3]:
 						inside = True
-						
-			else:
-				inside = self.pointInPoly(tempRect[0], tempRect[1], rect)
+
 			if inside:
 				self.selectedRectInd = ind
 				print("selected", self.selectedRectInd)
 				self.currentRectangles["selectedRect"] = [rect]
+				self.dispImg()
 				break
 
 			ind += 1
@@ -279,6 +389,9 @@ class Annotator:
 						break
 
 				ind += 1
+		if self.selectedRectInd == -1:
+			print("didnt select anythign")
+			self.dispImg()
 
 
 
@@ -306,6 +419,7 @@ class Annotator:
 
 	def dispImg(self):
 		drawImg = self.openImg.copy()
+		# self.squareImg(self.openImg, self.currentRectangles["drawnRectangles"],500)
 		# (720, 1280, 3)
 		h, w = drawImg.shape[0:2]
 		self.scale = 1
@@ -317,6 +431,7 @@ class Annotator:
 			self.scale = 1280/w
 			drawImg = cv2.resize(drawImg, (int(self.scale * w), int(self.scale*h)), interpolation = cv2.INTER_AREA)
 
+		
 
 		for rectType in self.currentRectangles:
 			thicknesses = {"drawnRectangles": 5, "tempRectangle": 1, "possibleRectangles": 1, "selectedRect": 5}
@@ -326,36 +441,55 @@ class Annotator:
 			for rect in self.currentRectangles[rectType]:
 				if len(rect) > 0:
 					if type(rect[0]) == int:
-						if len(rect) > 5:
-							if rect[4] == 1: # truncated
-								drawImg = cv2.putText(drawImg, "t", (int(rect[0]*self.scale+40), int(rect[1]*self.scale-5)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
-							if rect[5] == 1: # difficult
-								drawImg = cv2.putText(drawImg, "d", (int(rect[0]*self.scale), int(rect[1]*self.scale-5)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
 
-						if len(self.labelName) > 1:
-							center = (int((rect[0]+rect[2])*self.scale/2), int((rect[1]+rect[3])*self.scale/2))
-							if len(rect) > 6:
+						# if rect[0] == -2:
+						# 	rect[0] = -2000
+						# 	self.unsavedChanges = True
+						# 	print("updating")
 
-								drawImg = cv2.putText(drawImg, self.labelName[rect[6]][0], center, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
+						if rect[0] == -2000:
+							if rect[5] != -10000:
+								lastPt = [(rect[1] + rect[5] - rect[3])* self.scale, (rect[2] + rect[6] - rect[4])* self.scale]
+								pts = np.array([[rect[1]* self.scale, rect[2]* self.scale], [rect[3]* self.scale, rect[4]* self.scale], [rect[5]* self.scale, rect[6]* self.scale], lastPt], np.int32)
+
+
+								drawImg = cv2.polylines(drawImg, [pts], True, colors[rectType], thicknesses[rectType])
+
 							else:
-								drawImg = cv2.putText(drawImg, self.labelName[0][0], center, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
+								drawImg = cv2.line(drawImg, (int(rect[1]*self.scale), int(rect[2]*self.scale)), (int(rect[3]*self.scale), int(rect[4]*self.scale)), colors[rectType], thicknesses[rectType])
+						
 
-						if len(rect) > 8 and self.makeAngles:
-							angle = self.getAngle(rect)
+						else:
+							if len(rect) > 5:
+								if rect[4] == 1: # truncated
+									drawImg = cv2.putText(drawImg, "t", (int(rect[0]*self.scale+40), int(rect[1]*self.scale-5)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
+								if rect[5] == 1: # difficult
+									drawImg = cv2.putText(drawImg, "d", (int(rect[0]*self.scale), int(rect[1]*self.scale-5)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
 
-							center = (int((rect[0]+rect[2])*self.scale/2), int((rect[1]+rect[3])*self.scale/2))
-							drawImg = cv2.putText(drawImg, str(angle), center, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
+							if len(self.labelName) > 1:
+								center = (int((rect[0]+rect[2])*self.scale/2), int((rect[1]+rect[3])*self.scale/2))
+								if len(rect) > 6:
 
-							drawImg = cv2.arrowedLine(drawImg, (int(rect[6]*self.scale), int(rect[7]*self.scale)), (int(rect[8]*self.scale), int(rect[9]*self.scale)), colors[rectType], thicknesses[rectType])
-					
+									drawImg = cv2.putText(drawImg, self.labelName[rect[6]][0], center, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
+								else:
+									drawImg = cv2.putText(drawImg, self.labelName[0][0], center, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
+
+							if len(rect) > 8 and self.makeAngles:
+								angle = self.getAngle(rect)
+
+								center = (int((rect[0]+rect[2])*self.scale/2), int((rect[1]+rect[3])*self.scale/2))
+								drawImg = cv2.putText(drawImg, str(angle), center, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2, cv2.LINE_AA)
+
+								drawImg = cv2.arrowedLine(drawImg, (int(rect[6]*self.scale), int(rect[7]*self.scale)), (int(rect[8]*self.scale), int(rect[9]*self.scale)), colors[rectType], thicknesses[rectType])
+						
 
 
-						if self.makingAngleLine and rectType == "tempRectangle":
-							drawImg = cv2.line(drawImg, (int(rect[0]*self.scale), int(rect[1]*self.scale)), (int(rect[2]*self.scale), int(rect[3]*self.scale)), colors[rectType], thicknesses[rectType])
+							if self.makingAngleLine and rectType == "tempRectangle":
+								drawImg = cv2.line(drawImg, (int(rect[0]*self.scale), int(rect[1]*self.scale)), (int(rect[2]*self.scale), int(rect[3]*self.scale)), colors[rectType], thicknesses[rectType])
 
-						else: 
-							drawImg = cv2.rectangle(drawImg, (int(rect[0]*self.scale), int(rect[1]*self.scale)), (int(rect[2]*self.scale), int(rect[3]*self.scale)), colors[rectType], thicknesses[rectType])
-					
+							else: 
+								drawImg = cv2.rectangle(drawImg, (int(rect[0]*self.scale), int(rect[1]*self.scale)), (int(rect[2]*self.scale), int(rect[3]*self.scale)), colors[rectType], thicknesses[rectType])
+						
 
 					else:
 
@@ -389,6 +523,12 @@ class Annotator:
 						drawImg = cv2.polylines(drawImg, [pts], closed, color, thick)
 
 
+		h, w = drawImg.shape[0:2]
+		bordered = np.zeros((h+self.borderSize*2,w+self.borderSize*2,3), dtype=np.uint8)
+		bordered[:] = (255, 255,0)
+		# cv2.imshow("b", bordered[self.borderSize:h+self.borderSize, self.borderSize:w+self.borderSize])
+		bordered[self.borderSize:h+self.borderSize, self.borderSize:w+self.borderSize] = drawImg
+		drawImg = bordered
 
 
 		h, w = drawImg.shape[0:2]
@@ -563,30 +703,9 @@ class Annotator:
 				else:
 					print("no rectangle selected")
 
-			elif k == 117 and False: # u (polygon is unused)
-				print("polygon feature retired")
-				if "  polygon" in self.buttons:
-					b = self.buttons["  polygon"]
-					self.buttons["  rect"] = b
-					self.buttons.pop("  polygon")
-					self.currentRectangles["tempRectangle"] = [[]]
-					print("rectangle mode")
-					self.polygonMode = False
-				else:
-					b = self.buttons["  rect"]
-					self.currentRectangles["tempRectangle"] = [[]]
-					self.buttons["  polygon"] = b
-					self.buttons.pop("  rect")
-					self.polygonMode = True
-					print("polygon mode")
-
-				self.saveDataJSON()
-				self.dispImg()
-
 			elif k == 112: # p
-				print("exporting images")
-				
-				self.saveNormalDataXML()
+				print("no longer exporting images with p key")
+		
 
 			elif k == 111: # o
 				print("exporting just images")
@@ -677,7 +796,7 @@ class Annotator:
 		self.allFiles = os.listdir(self.path)
 		self.dirs = []
 		for i in self.allFiles:
-			if i[-4::] in [".avi", ".png", ".jpg", ".mov", ".MOV"]:
+			if i[-4::] in [".avi", ".png", ".jpg", ".mov", ".MOV", "mp4"]:
 				self.dirs += [i]
 		self.countLabels()
 
@@ -957,6 +1076,7 @@ class Annotator:
 
 		h,w = img.shape[0:2]
 		res = img.copy()
+
 		# res = cv2.resize(res, (int(self.scale * w), int(self.scale*h)), interpolation = cv2.INTER_AREA)
 		# i=0
 		# while i < transformations[0]:
@@ -980,12 +1100,18 @@ class Annotator:
 		if transformations[2]==1: # horizontal
 			res = cv2.flip(res, 1)
 			for r in rectangles:
-				r[0:4] = [w-r[2], r[1], w-r[0], r[3]]
+				if r[0] == -2000:
+					r[1:7] = [w-r[1], r[2], w-r[3], r[4], w-r[5], r[6]]
+				else:
+					r[0:4] = [w-r[2], r[1], w-r[0], r[3]]
 
 		if transformations[3]==1:
 			res = cv2.flip(res, 0)
 			for r in rectangles:
-				r[0:4] = [r[0], h-r[3], r[2], h-r[1]]
+				if r[0] == -2000:
+					r[1:7] = [r[1], h-r[2], r[3], h-r[4], r[5], h-r[6]]
+				else:
+					r[0:4] = [r[0], h-r[3], r[2], h-r[1]]
 
 
 		# cv2.imshow("Res", res)
@@ -1043,20 +1169,52 @@ class Annotator:
 
 
 
-	def saveNormalDataXML(self):
+	def saveNormalData(self, saveFormat="XML"):
 		self.saveDataJSON()
 
-		print("saving xml files")
-		trainDirName = self.path + "/" + self.fileLabelName + "_train"
-		if not os.path.exists(trainDirName):
-			os.makedirs(trainDirName)
-		validDirName = self.path + "/" + self.fileLabelName + "_validate"
-		if not os.path.exists(validDirName):
-			os.makedirs(validDirName)
+		if saveFormat == "yolo": # 100 validate, 1500 train, 70 test
+			print("saving yolo files")
+			yamlTxt = "path: \n\n"
+			dirNames = ["train", "valid", "test"]
+			i=0
+			mainFolder = self.path + "/yolo_"+self.fileLabelName
+			if os.path.exists(mainFolder):
+				os.rename(mainFolder, mainFolder+"_old" + str(random.randint(0,100)))
+				# os.rmdir(mainFolder)
+
+			os.makedirs(mainFolder)
+
+			while i < len(dirNames):
+				yamlTxt += dirNames[i] + ": " + mainFolder + "/" + dirNames[i] + "/images\n"
+				dirNames[i] = mainFolder + "/" + dirNames[i]
+				os.makedirs(dirNames[i])
+				os.makedirs(dirNames[i] + "/" + "images")
+				os.makedirs(dirNames[i] + "/" + "labelTxt")
+
+
+				i+=1
+			yamlTxt += "\nnc: " + str(len(self.labelName)) + "\n" + "names: " + str(self.labelName)
+
+
+			with open( mainFolder + "/data.yaml", 'w') as fileHandle:
+				fileHandle.write(yamlTxt)
+				fileHandle.close()
+
+		else:
+
+
+			print("saving xml files")
+			trainDirName = self.path + "/" + self.fileLabelName + "_train"
+			if not os.path.exists(trainDirName):
+				os.makedirs(trainDirName)
+			validDirName = self.path + "/" + self.fileLabelName + "_validate"
+			if not os.path.exists(validDirName):
+				os.makedirs(validDirName)
 
 		showImgs = True
 		imgCount = 0
 		labelCount = 0
+		missed = 0
 		transformations = self.getTransformationTypes()
 		for fileName in self.dirs:
 
@@ -1072,53 +1230,94 @@ class Annotator:
 					cap = cv2.VideoCapture(self.path + "/" + fileName)
 
 					for frameNum in frameNums:
-						if imgCount%10 == 0:
-							dirName = validDirName
-						else:
-							dirName = trainDirName
-						imgCount += 1
-
-
-						saveName = fileName[0:-4] + "_f" + str(frameNum) + ".jpg"
-
 						cap.set(1,frameNum-1)
 						ret, img = cap.read()
-						if not ret:
-							print("no frame found at frame number", frameNum)
-							break
 
-						if showImgs:
-							if imgCount%10 == 0:
-								cv2.imshow("saving", img)
-								cv2.waitKey(1)
-
-						
 
 						rects = data[str(frameNum)]
-						labelCount += len(rects)
 
-						saveTypes = []
-						if self.makeAngles:
-							for i in rects:
-								angle = self.getAngle(i)
-								saveTypes += [self.sectionLabels[self.getAngleCategory(angle)]]
+						if saveFormat == "yolo":
+							imgs, allRects = self.squareImg(img, rects, 500)
+							
+
+							if imgCount%10 == 0:
+								dirName = dirNames[1] # validate
+							elif imgCount%11 == 0:
+								dirName = dirNames[2] # test
+							else:
+								dirName = dirNames[0] # train
+
 						else:
-							for i in rects:
-								if len(i) > 6:
-									saveTypes += [self.labelName[i[6]]]
-								else:
-									saveTypes += self.labelName[0]
+							allRects = [rects]
+							imgs = [img]
+							if imgCount%10 == 0:
+								dirName = validDirName
+							else:
+								dirName = trainDirName
+						
+						count = 0
+						# print("\nall rects", allRects)
+						while count < len(allRects):
+							rects = allRects[count]
+							img = imgs[count]
+							# print("rects", rects)
+							count+=1
+							saveName = fileName[0:-4] + "_f" + str(frameNum) + ".jpg"
 
+							imgCount += 1
 
+							if not ret:
+								print("no frame found at frame number", frameNum)
+								break
 
-						tNum = 0
-						for t in transformations:
-							sn = saveName[0:-4] + "_" + str(tNum) + saveName[-4::]
-							imWrite, r = self.transformImg(img, rects, t)
-							cv2.imwrite(dirName + "/" + sn, imWrite)
-							if self.transformations["Include Pascal VOC label (XML)"]:
-								self.saveXML(dirName,  sn, r, saveTypes, imWrite.shape[0:2])
-							tNum += 1
+							if showImgs:
+								if imgCount%10 == 0:
+									cv2.imshow("saving", img)
+									cv2.waitKey(1)
+							
+							labelCount += len(rects)
+
+							saveTypes = []
+							skip = False
+							if self.makeAngles:
+								for i in rects:
+									angle = self.getAngle(i)
+									if angle == False:
+										print("no angle found for frame, skipping.")
+										skip = True
+										break
+									j=0
+									while j < len(self.sectionLabels):
+										if self.sectionLabels[j][0]<=angle<self.sectionLabels[j][1]:
+											saveTypes += [str(self.sectionLabels[j][0]) + "_" + str(self.sectionLabels[j][1])]
+											break
+										j+=1
+									if j == len(self.sectionLabels):
+										print("Section label never added for angle", angle)
+							else:	
+								for i in rects:
+									if len(i) > 6 and not self.makeSlant:
+										saveTypes += [self.labelName[i[6]]]
+									else:
+										saveTypes += [self.labelName[0]]
+
+							if not skip:
+
+								tNum = 0
+								for t in transformations:
+									sn = saveName[0:-4] + "_" + str(tNum) + saveName[-4::]
+									imWrite, r = self.transformImg(img, rects, t)
+									if saveFormat == "yolo":
+										cv2.imwrite(dirName + "/images/" + sn, imWrite)
+									else:
+										cv2.imwrite(dirName + "/" + sn, imWrite)
+
+									if self.transformations["Include Pascal VOC label (XML)"]:
+										if saveFormat == "yolo":
+											self.saveYOLO(dirName+"/labelTxt/" + sn[0:-4] + ".txt", r, saveTypes)
+										else:
+											self.saveXML(dirName,  sn, r, saveTypes, imWrite.shape[0:2])
+									tNum += 1
 
 				elif fileName[-4::] in [".jpg", ".png"]:
 
@@ -1168,13 +1367,136 @@ class Annotator:
 		if showImgs:
 			cv2.destroyWindow('saving')
 			
-		print("saved", labelCount, "labels from", imgCount, "frames")
+		print("saved", labelCount, "labels from", imgCount, "frames. Missed", missed)
 
 
 		print("Saved all")
 
 
+	def squareImg(self, img, rects, finalSize):
+
+		if len(rects) == 0:
+			return [], []
+		# for only slanted rects. may modify for all rects later
+		h, w = img.shape[0:2]
+		for i in rects:
+			i = [-2000, min(max(i[1],0),w), min(max(i[2],0),h), min(max(i[3],0),w), min(max(i[4],0),h),  min(max(i[5],0),w), min(max(i[6],0),h)]
+		smallestSizes = [w, h]
+		largestSizes = [0, 0]
+		for r in rects:
+			i=1
+			while i<len(r):
+				smallestSizes[0] = min(r[i], smallestSizes[0])
+				smallestSizes[1] = min(r[i+1], smallestSizes[1])
+				largestSizes[0] = max(r[i], largestSizes[0])
+				largestSizes[1] = max(r[i+1], largestSizes[1])
+				i+=2
+		smallestSquare = (abs(largestSizes[0]-smallestSizes[0]), abs(largestSizes[1]-smallestSizes[1]))
+		if max(smallestSquare) > min(h, w):
+
+			# print("too hard to shrink. smallest square", smallestSquare, (h,w))
+
+			if len(rects)==1:
+				# print("no more rects to divide")
+				return [], []
+			
+			rects.sort(key = lambda x: min(x[1], x[3]))
+
+			i = len(rects)-1
+			div = -1
+			rightRects = []
+			while i > 0:
+				rightRects += [rects[i][:]]
+				if max(rects[i-1][1], rects[i-1][3], rects[i-1][5]) <  max(rects[i][1], rects[i][3], rects[i][5]):
+					div = int((max(rects[i-1][1], rects[i-1][3], rects[i-1][5]) +  max(rects[i][1], rects[i][3], rects[i][5]))/2)
+					break
+				
+				i-=1
+
+			leftRects = rects[0:i]
+
+			if div < 0:
+				# print("dividing point less than 0")
+				return [], []
+
+			# img = cv2.line(img, (div,0), (div,h), (0,0,0),5)
+			# cv2.imshow("split", img)
+
+
+
+			allRects = []
+			allImgs = []
+
+			# print("processing left rect")
+			img2, newRects = self.squareImg(img[:, 0:div].copy(), leftRects, finalSize)
+			if newRects != []:
+				allImgs += img2
+				allRects += newRects
+
+			for rect in rightRects:
+				rect[1] -= div
+				rect[3] -= div
+				rect[5] -= div
+			# print("rrect", rightRects)
+
+			# print("processing right rect")
+			img2, newRects = self.squareImg(img[:, div::].copy(), rightRects, finalSize)
+			# print("done processing", newRects)
+			if newRects != []:
+				allImgs += img2
+				allRects += newRects
+
+
+
+			return allImgs, allRects
+
+
+			
+		else:
+			cropSize = min(h, w)
+			center = [(smallestSizes[0] + largestSizes[0])/2, (smallestSizes[1] + largestSizes[1])/2]
+			startFromBack=[center[0]-cropSize/2, center[1]-cropSize/2]
+			if startFromBack[0] < 0:
+				startFromBack[0] = 0
+			if startFromBack[1] < 0:
+				startFromBack[1] = 0	
+			if startFromBack[0]+cropSize > w:
+				startFromBack[0] = w-cropSize
+			if startFromBack[1]+cropSize > h:
+				startFromBack[1] = h-cropSize
+			startFromBack = [int(startFromBack[0]),  int(startFromBack[1])]
+
+
+			crop = img.copy()
+			crop = crop[startFromBack[1]:cropSize+startFromBack[1], startFromBack[0]:cropSize+startFromBack[0]]
+			scale = finalSize/cropSize
+			crop = cv2.resize(crop, (finalSize, finalSize), interpolation = cv2.INTER_AREA)
+			# scale = 1
+
+			# cv2.line(img, (0, startFromBack[1]), (w, startFromBack[1]), (0,0,0), 2)
+			# cv2.line(img, (startFromBack[0], 0), (startFromBack[0], h), (0,0,0), 2)
+			newRects = []
+			for i in rects:
+				rect = [0,0,0,0,0,0]
+				j=0
+				while j < 6:
+					rect[j] = (i[j+1]-startFromBack[(j)%2])*scale
+					j+=1
+				newRects += [[-2000] + rect]
+				# pts = np.array([[rect[0], rect[1]], [rect[2], rect[3]], [rect[4], rect[5]]], np.int32)
+				# crop = cv2.polylines(crop, [pts], True, (255,255,0), 3)
+
+			# num = random.randint(0,10)
+			# print("cropped", num)
+			# cv2.imshow("cropped", crop)
+
+			return [crop], [newRects]
+
+
+
 	def getAngle(self, rect):
+		if len(rect) < 9:
+			return False
 		# get the angle assuming rect is [x, x, x, x, x, (x1), (y1), (x2), (y2)]. Returns in degrees
 		angle = 0
 		if rect[6] != rect[8]:
@@ -1194,6 +1516,7 @@ class Annotator:
 		labels = 0
 		numVideos = 0
 		allAngles = []
+		allAnglesImg = []
 		for fileName in self.dirs:
 			jsonName = fileName[0:-4] + self.fileLabelName + ".json"
 			if jsonName in self.allFiles:
@@ -1202,11 +1525,13 @@ class Annotator:
 					data = json.load(json_file)
 					imgs += len(data.keys())
 					for frameNum in data:
+						allAnglesImg += [[]]
 						labels += len(data[frameNum])
 						if self.makeAngles:
 							for rect in data[frameNum]:
 								if len(rect) > 8:
 									allAngles += [self.getAngle(rect)]
+									allAnglesImg[-1] += [self.getAngle(rect)]
 								else:
 									print("unlabeled rectangle found on frame", frameNum, "of video", fileName)
 		self.numRects = labels
@@ -1214,12 +1539,62 @@ class Annotator:
 
 		
 		if self.makeAngles:
-			sections = [0] * 40
-			for angle in allAngles:
-				angleCategory = self.getAngleCategory(angle)
-				sections[angleCategory] +=1
+			sections = [0] * 360
 
-			print("section distribution", sections, self.sectionLabels)
+			for angle in allAngles:
+				sections[angle] +=1
+
+			countInSection = 0
+			angle = 0
+			startAngle = 0
+			self.sectionLabels = []
+			sectionAmounts = []
+			for i in sections:
+				
+				if countInSection > self.minSectionCount and angle - startAngle > self.minSectionStep:
+					self.sectionLabels += [[startAngle, angle]]
+					sectionAmounts += [countInSection]
+					print(sections[startAngle:angle])
+					countInSection = 0
+					startAngle = angle
+				countInSection += i
+				angle += 1
+			self.sectionLabels[-1][1] = 360
+
+			print("new labels", self.sectionLabels)
+			print("section amounts", sectionAmounts)
+
+			textLabels = []
+			for i in self.sectionLabels:
+				textLabels += [str(i[0]) + "_" + str(i[1])]
+			print("labels as text", textLabels)
+
+			print("section distribution", sections)
+
+			imgsPerLabel = [0]*len(self.sectionLabels)
+			n=0
+			for imgAngles in allAnglesImg:
+
+				labelsGiven = set()
+				for angle in imgAngles:
+					gaveLabel = False
+					i=0
+					for j in self.sectionLabels:
+						if j[0] <= angle < j[1]:
+							labelsGiven.add(i)
+							gaveLabel = True
+							break
+						i+=1
+					
+					if not gaveLabel:
+						print("uh oh- problem !")
+						return
+				print("given", labelsGiven, "from", imgAngles)
+			
+
+				for i in labelsGiven:
+					imgsPerLabel[i] += 1
+			print("imgs per label", imgsPerLabel)
 
 
 
@@ -1234,7 +1609,24 @@ class Annotator:
 			res = int(res/self.sectionStep)+1
 			return res
 			# print("angle", angle, "in section", sectionLabels[res])
+	
 
+
+	def saveYOLO(self, fileName, rectangles, saveTypes):
+		text = ""
+		i=0
+		while i < len(rectangles):
+			dims = rectangles[i][1:7]
+			dx = dims[4]-dims[2]
+			dy = dims[5]-dims[3]
+			dims += [dims[0]+dx, dims[1]+dy]
+			for j in dims:
+				text += str(j) + " "
+			text += saveTypes[i] + " 0\n"
+			i+=1
+		with open(fileName, 'w') as fileHandle:
+			fileHandle.write(text)
+			fileHandle.close()
 
 
 
@@ -1261,24 +1653,6 @@ class Annotator:
 			l = rectangles[i]
 			bb = l
 			pose = "Unspecified"
-			if type(l[0]) == list: # polygon
-				bb = []
-				bb +=  [min(sublist[0] for sublist in l)]
-				bb +=  [min(sublist[1] for sublist in l)]
-				bb +=  [max(sublist[0] for sublist in l)]
-				bb +=  [max(sublist[1] for sublist in l)]
-
-				pts = []
-				furthest = [-1, 0]
-				for pt in l:
-					pts += [(int(pt[0]), int(pt[1]))]
-					if (pts[0][0]-pts[-1][0])**2 + (pts[0][1]-pts[-1][1])**2 > furthest[0]:
-						furthest = [(pts[0][0]-pts[-1][0])**2 + (pts[0][1]-pts[-1][1])**2, pts[-1]]
-
-				if (pts[0][0]-furthest[1][0]) != 0:
-					pose = str(int(math.degrees(math.atan((pts[0][1]-furthest[1][1]) / (pts[0][0]-furthest[1][0]) ))))
-				else:
-					pose = "90"
 			truncated = 0
 			difficult = 0
 			if len(l) > 5:
@@ -1300,15 +1674,6 @@ class Annotator:
 \t\t\t<ymax>""" + str(max(bb[1], bb[3])) + """</ymax>
 \t\t</bndbox>"""
 
-			if type(l[0]) == list:
-				text += "\n<polygon>\n"
-				j=0
-				while j < len(l):
-					
-					text += "<x" + str(j+1) +">" + str(l[j][0]) + "</x" + str(j+1) + ">\n"
-					text += "<y" + str(j+1) +">" + str(l[j][1]) + "</y" + str(j+1) + ">\n"
-					j+=1
-				text += "</polygon>"
 					
 			text += "\n\t</object>"
 			i+=1
@@ -1363,5 +1728,5 @@ if __name__ == "__main__":
 		from tflite_support.task import core
 		from tflite_support.task import processor
 		from tflite_support.task import vision
-	annot = Annotator(videosPath, saveName, modelName)
+	annot = Annotator(videosPath, saveName, modelName, makeSlant, makeAngles)
 	annot.goThroughDir()
